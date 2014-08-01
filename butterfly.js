@@ -1,7 +1,12 @@
 'use strict';
 
+var fs = require('fs')
 var http = require('http')
 var capParser = require('./cap-parser.js')
+JSON.minify = JSON.minify || require('node-json-minify')
+
+// Default configuration file name
+var CONFIG_FILE_DEFAULT = 'butterfly.config'
 
 // TODO: Load program-wide parameters from configuration file.
 // TODO: Use comment syntax that can be used to auto-generate documentation,
@@ -9,36 +14,38 @@ var capParser = require('./cap-parser.js')
 // TODO: Make sure that responses are not cached too much, so that the
 //       butterfly really notices the tornado.
 
-// URL to query for wheather alerts
-var SERVICE_URL = 'http://alerts.weather.gov/cap/us.php?x=0'
-var PARSER_PARAMS = {
-    // Keyword to search for in event descriptions
-    keywords: ['Tornado','Thunderstorm','Flood'],
-    // Urgency levels considered urgent
-    urgent: ['Expected','Immediaté'],
-    // Severy levels considered urgent
-    severe: ['Severe','Extreme']
+// TODO: Allow passing configuration file as input parameter
+if(!fs.existsSync(CONFIG_FILE_DEFAULT)) {
+    console.log('Error: Could not read configuration file "' +
+                CONFIG_FILE_DEFAULT + '".')
+    process.exit(1)
 }
-// Time between queries for weather information, given in milliseconds.
-// If the previous query has not completed during the interval, the system
-// will wait for another interval, as many times as is needed to get some
-// kind of response.
-//
-// TODO: Make sure that the system does not hang if response is not received
-var QUERY_INTERVAL = 5000
 
-console.log('Starting pulling of warnings from ' + SERVICE_URL)
-setInterval(printWarningCount,QUERY_INTERVAL)
+try {
+    var configJson = fs.readFileSync(CONFIG_FILE_DEFAULT,
+                                         {encoding: 'utf-8'})
+    var config = JSON.parse(JSON.minify(configJson))
+} catch (exception) {
+    console.log('Error: Could not parse configuration file ": ' +
+                CONFIG_FILE_DEFAULT +
+                '": ' + exception)
+    process.exit(1)
+}
+
+console.log('Starting pulling warnings from ' + config.serviceUrl)
+setInterval(printWarningCount,config.queryInterval)
 printWarningCount()
+
+// TODO: Make sure that the system does not hang if response is not received
 
 var fetching = false
 function printWarningCount() {
     if(fetching) {
-        return;
+        return
     }
 
     fetching = true
-    http.get(SERVICE_URL, function(response) {
+    http.get(config.serviceUrl, function(response) {
         var xml = ''
 
         response.on('data',function(data) {
@@ -46,17 +53,17 @@ function printWarningCount() {
         })
 
         response.on('end',function() {
-            fetching = false;
+            fetching = false
 
             if(response.statusCode !== 200) {
                 console.log('Error: Wrong status code (' +
                             response.statusCode +
                             ')')
-                return;
+                return
             }
 
             var alerts = []
-            capParser.parse(xml,alerts,PARSER_PARAMS)
+            capParser.parse(xml,alerts,config.parserParameters)
 
             console.log('Found ' + alerts.length + ' warnings')
 
