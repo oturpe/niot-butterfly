@@ -1,5 +1,13 @@
 // CAP message parser that parses input xml and adds found warnings
-// to given output list. Parameters are as follows:
+// to given output list.
+'use strict'
+
+var xml2js = require('xml2js')
+
+
+// Creates a new CAP message parser. Given Bunyan log is used for logging.
+//
+// Parameters are as follows:
 //
 //     keywords: a list of keywords to match with 'cap:event' field. Only events
 //               matching at least one of them are included in output. Event
@@ -8,27 +16,46 @@
 //             event is flagged urgent if at least one matches.
 //     severe: list of strings that are matched to 'cap:severity' field. The
 //             event is flagged severe if at least one matches.
-'use strict'
+function CapParser(log,parameters) {
+    if(!log) {
+        throw new Error('CapParser requires log object')
+    }
+    if(!parameters) {
+        throw new Error('CapParser requires parameters object')
+    }
 
-var xml2js = require('xml2js')
+    this.log = log
+    this.keywords = parameters.keywords
+    this.urgent = parameters.urgent
+    this.severe = parameters.severe
+}
 
-exports.parse = function parse(input,output,parameters) {
+exports.CapParser = CapParser
+
+CapParser.prototype.parse = function(input,error,success) {
+    var self = this
     xml2js.parseString(input,{async: true},findRelevantWarnings)
 
     function findRelevantWarnings(err,result) {
+        if(err) {
+            self.log.error({err: err},"Parsing weather alert XML failed")
+            return
+        }
         // TODO: Sometimes this is called with undefined 'result'. Handle
         //       this case properly
         var entries = result.feed.entry
         if (!containsWarnings(entries)) {
+            success([])
             return
         }
 
+        var warnings = []
         for(var i=0; i < entries.length; i++) {
             var entry = entries[i]
 
             var type
-            for(var j=0; j < parameters.keywords.length; j++) {
-                var keyword = parameters.keywords[j]
+            for(var j=0; j < self.keywords.length; j++) {
+                var keyword = self.keywords[j]
                 var eventElement = entry['cap:event'][0]
                 if(eventElement.indexOf(keyword) > -1) {
                     type = keyword
@@ -43,12 +70,14 @@ exports.parse = function parse(input,output,parameters) {
             var urgency = entry['cap:urgency'][0]
             var severity = entry['cap:severity'][0]
 
-            output.push({
+            warnings.push({
                 type: type,
-                urgent: parameters.urgent.indexOf(urgency) > -1,
-                severe: parameters.severe.indexOf(severity) > -1
+                urgent: self.urgent.indexOf(urgency) > -1,
+                severe: self.severe.indexOf(severity) > -1
             })
          }
+
+         success(warnings)
     }
 }
 

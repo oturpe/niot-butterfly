@@ -2,8 +2,20 @@
 
 var fs = require('fs')
 var http = require('http')
-var capParser = require('./cap-parser.js')
+var capParsing = require('./cap-parser.js')
 JSON.minify = JSON.minify || require('node-json-minify')
+var bunyan = require('bunyan')
+
+var log = bunyan.createLogger({
+    name: 'weather-client',
+    level: 'info',
+    streams: [
+        {path: 'butterfly.log'},
+        {stream: process.stderr}
+    ],
+    serializers: {
+        err: bunyan.stdSerializers.err
+    }})
 
 // Default configuration file name
 var CONFIG_FILE_DEFAULT = 'butterfly.config'
@@ -16,8 +28,8 @@ var CONFIG_FILE_DEFAULT = 'butterfly.config'
 
 // TODO: Allow passing configuration file as input parameter
 if(!fs.existsSync(CONFIG_FILE_DEFAULT)) {
-    console.log('Error: Could not read configuration file "' +
-                CONFIG_FILE_DEFAULT + '".')
+    var message = 'Could not read configuration file'
+    log.fatal({configFile: CONFIG_FILE_DEFAULT}, message)
     process.exit(1)
 }
 
@@ -26,26 +38,54 @@ try {
                                          {encoding: 'utf-8'})
     var config = JSON.parse(JSON.minify(configJson))
 } catch (exception) {
-    console.log('Error: Could not parse configuration file ": ' +
-                CONFIG_FILE_DEFAULT +
-                '": ' + exception)
+    var message = 'Could not parse configuration file'
+    var errorFields = {
+        configFile: CONFIG_FILE_DEFAULT,
+        parsedConfig: config,
+        err: exception
+    }
+
+    log.fatal(errorFields,message)
     process.exit(1)
 }
 
-console.log('Starting pulling warnings from ' + config.serviceUrl)
+log.info({config: config}, 'Starting pulling weather warnings')
 setInterval(printWarningCount,config.queryInterval)
 printWarningCount()
 
 // TODO: Make sure that the system does not hang if response is not received
 
-var fetching = false
+var capParser = new capParsing.CapParser(log,config.parserParameters)
+
+// For development only: Fetch weather warnings and log the number of warnings
+// received.
 function printWarningCount() {
+    getWeatherWarnings(function(error) {
+        log.error({err: error},'Error while retrieving weather warnings')
+    },function(alerts) {
+        log.info({amountOfAlerts: alerts.length},'Found weather alerts')
+    })
+}
+
+// Gets weather warnings from given service URL, passes them to CAP parser and
+// finally calls given callback with parsed results.
+var fetching = false
+function getWeatherWarnings(error,callback){
     if(fetching) {
+        var loggedObject = {
+            serviceUrl: config.serviceUrl,
+            queryInterval: config.queryInterval
+        }
+
+        log.info(loggedObject,
+                 'Previous fetch taking longer than query interval %s',
+                 config.queryInterval)
+
         return
     }
 
     fetching = true
-    http.get(config.serviceUrl, function(response) {
+    var getRequest = http.get(config.serviceUrl, function(response) {
         var xml = ''
 
         response.on('data',function(data) {
@@ -56,20 +96,15 @@ function printWarningCount() {
             fetching = false
 
             if(response.statusCode !== 200) {
-                console.log('Error: Wrong status code (' +
-                            response.statusCode +
-                            ')')
+                error(new Error('Wrong status code ' + response.statusCode))
                 return
             }
 
-            var alerts = []
-            capParser.parse(xml,alerts,config.parserParameters)
-
-            console.log('Found ' + alerts.length + ' warnings')
-
-            //for (var i=0; i<alerts.length; i++) {
-            //    console.log(alerts[i])
-            //}
+            capParser.parse(xml,error,callback)
         })
-    }).on('error', function(error) {console.log('Error' + error)})
+    })
+
+    getRequest.on('error', function(getError) {
+        error(getError)
+    })
 }
