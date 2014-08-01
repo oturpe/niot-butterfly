@@ -13,17 +13,18 @@
 var xml2js = require('xml2js')
 
 exports.parse = function parse(input,output,parameters) {
-    xml2js.parseString(input,findRelevantWarnings)
+    xml2js.parseString(input,{async: true},findRelevantWarnings)
 
     function findRelevantWarnings(err,result) {
+        // TODO: Sometimes this is called with undefined 'result'. Handle
+        //       this case properly
         var entries = result.feed.entry
-        var entry
         if (!containsWarnings(entries)) {
             return
         }
 
         for(var i=0; i < entries.length; i++) {
-            entry = entries[i]
+            var entry = entries[i]
 
             var type
             for(var j=0; j < parameters.keywords.length; j++) {
